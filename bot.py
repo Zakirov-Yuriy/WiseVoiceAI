@@ -16,10 +16,33 @@ ffmpeg_dir = r"D:\Programming\ffmpeg-7.1.1-essentials_build\bin"
 os.environ["PATH"] += os.pathsep + ffmpeg_dir
 
 # 🔗 Укажи адреса своих API (ngrok)
-TRANSCRIBE_API_URL = "https://46f11c67f92c.ngrok-free.app/transcribe"
-DIARIZATION_API_URL = "https://88eb9d6863e2.ngrok-free.app/diarize"
+TRANSCRIBE_API_URL = "https://hay-brazilian-ma-bulk.trycloudflare.com/transcribe"
+DIARIZATION_API_URL = "https://handbook-movement-error-king.trycloudflare.com/diarize"
 
 logging.basicConfig(level=logging.INFO)
+
+
+def split_audio(input_path, segment_time=30):
+    output_dir = os.path.join(os.path.dirname(input_path), "fragments")
+    os.makedirs(output_dir, exist_ok=True)
+    output_pattern = os.path.join(output_dir, "fragment_%03d.mp3")
+
+    command = [
+        os.path.join(ffmpeg_dir, "ffmpeg.exe"),
+        "-i", input_path,
+        "-f", "segment",
+        "-segment_time", str(segment_time),
+        "-c", "copy",
+        output_pattern
+    ]
+    subprocess.run(command, check=True)
+
+    fragments = sorted([
+        os.path.join(output_dir, f)
+        for f in os.listdir(output_dir)
+        if f.startswith("fragment_")
+    ])
+    return fragments
 
 
 def format_diarization(diarization):
@@ -45,12 +68,12 @@ check_ffprobe(ffmpeg_dir)
 
 
 # --- send_file_to_api -----------------------------------
-async def send_file_to_api(file_path: str):
+async def send_file_to_api(file_path: str, api_url: str):
     async with httpx.AsyncClient() as client:
         with open(file_path, "rb") as f:
             files = {"file": (os.path.basename(file_path), f, "audio/mpeg")}
             try:
-                response = await client.post(TRANSCRIBE_API_URL, files=files)
+                response = await client.post(api_url, files=files)
             except httpx.RequestError as e:
                 return {"error": f"Ошибка соединения с API: {e}"}
 
@@ -60,7 +83,7 @@ async def send_file_to_api(file_path: str):
             try:
                 return response.json()
             except ValueError:
-                return {"error": "Ошибка: некорректный или пустой ответ от API"}
+                return {"error": "Ошибка: некорректный ответ от API"}
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -101,7 +124,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("🔗 Скачиваю и обрабатываю видео...")
 
-    result = download_and_transcribe_youtube(url, DIARIZATION_API_URL)
+    # Убрать второй аргумент DIARIZATION_API_URL
+    result = download_and_transcribe_youtube(url)
 
     if "error" in result:
         return await update.message.reply_text(f"❌ Ошибка: {result['error']}")
@@ -114,9 +138,121 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for seg in combined:
         full_text += f"🗣 Спикер {seg['speaker']}:\n{seg['text']}\n\n"
 
-    # Разбиваем текст на части по 4000 символов (чуть меньше лимита)
+    # Разбиваем текст на части по 4000 символов
     for i in range(0, len(full_text), 4000):
         await update.message.reply_text(full_text[i:i + 4000])
+
+
+def download_and_transcribe_youtube(url: str):
+    temp_dir = tempfile.gettempdir()
+    unique_id = str(uuid.uuid4())
+    outtmpl = os.path.join(temp_dir, unique_id + ".%(ext)s")
+
+    try:
+        ffmpeg_dir = r"D:\Programming\ffmpeg-7.1.1-essentials_build\bin"
+        ydl_opts = {
+            "format": "bestaudio/best",
+            "outtmpl": outtmpl,
+            "ffmpeg_location": ffmpeg_dir,
+            "postprocessors": [{
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": "192",
+            }],
+            "quiet": True,
+        }
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info_dict = ydl.extract_info(url, download=True)
+            audio_path = ydl.prepare_filename(info_dict)
+            audio_path = os.path.splitext(audio_path)[0] + ".mp3"
+
+        if not os.path.exists(audio_path):
+            return {"error": "Файл не найден после скачивания"}
+
+        # Создаем папку для фрагментов
+        fragment_dir = os.path.join(os.path.dirname(audio_path), "fragments")
+        os.makedirs(fragment_dir, exist_ok=True)
+        output_pattern = os.path.join(fragment_dir, "fragment_%03d.mp3")
+
+        # Разбиваем аудио на фрагменты по 30 секунд
+        command = [
+            os.path.join(ffmpeg_dir, "ffmpeg.exe"),
+            "-i", audio_path,
+            "-f", "segment",
+            "-segment_time", "30",
+            "-c", "copy",
+            output_pattern
+        ]
+        subprocess.run(command, check=True)
+
+        fragments = sorted([
+            os.path.join(fragment_dir, f)
+            for f in os.listdir(fragment_dir)
+            if f.startswith("fragment_") and f.endswith(".mp3")
+        ])
+
+        if not fragments:
+            return {"error": "Не удалось разделить аудио на фрагменты"}
+
+        all_segments = []
+
+        # Обрабатываем каждый фрагмент
+        for i, fragment_path in enumerate(fragments):
+            # Смещение времени для текущего фрагмента
+            time_offset = i * 30
+
+            # Отправляем фрагмент на транскрибацию
+            with open(fragment_path, "rb") as f:
+                transcript_response = requests.post(TRANSCRIBE_API_URL, files={"file": f})
+                transcript_data = transcript_response.json()
+
+            # Отправляем фрагмент на диаризацию
+            with open(fragment_path, "rb") as f:
+                diarization_response = requests.post(DIARIZATION_API_URL, files={"file": f})
+                diarization_data = diarization_response.json()
+
+            # Если получили ошибку - пропускаем фрагмент
+            if "segments" not in transcript_data or "diarization" not in diarization_data:
+                logging.error(
+                    f"Ошибка обработки фрагмента {i}: {transcript_data.get('error', '')} {diarization_data.get('error', '')}")
+                continue
+
+            # Корректируем временные метки
+            for segment in transcript_data.get("segments", []):
+                segment["start"] += time_offset
+                segment["end"] += time_offset
+
+            for segment in diarization_data.get("diarization", []):
+                segment["start"] += time_offset
+                segment["end"] += time_offset
+
+            # Объединяем результаты фрагмента
+            combined = combine_transcript_with_diarization(
+                transcript_data.get("segments", []),
+                diarization_data.get("diarization", [])
+            )
+            all_segments.extend(combined)
+
+        # Объединяем последовательные сегменты
+        merged = merge_consecutive_segments(all_segments)
+        return {"combined": merged}
+
+    except Exception as e:
+        logging.exception("Ошибка при обработке YouTube видео")
+        return {"error": str(e)}
+
+    finally:
+        # Очистка временных файлов
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
+        # Удаление фрагментов
+        fragment_dir = os.path.join(os.path.dirname(audio_path), "fragments")
+        if os.path.exists(fragment_dir):
+            for f in os.listdir(fragment_dir):
+                os.remove(os.path.join(fragment_dir, f))
+            os.rmdir(fragment_dir)
+
 
 
 # 1. Отправляем в API транскрибации
@@ -171,7 +307,8 @@ def combine_transcript_with_diarization(transcript_segments, diarization_segment
 
     return result
 
-def download_and_transcribe_youtube(url: str, diarization_url: str):
+
+def download_and_transcribe_youtube(url: str):
     temp_dir = tempfile.gettempdir()
     unique_id = str(uuid.uuid4())
     outtmpl = os.path.join(temp_dir, unique_id + ".%(ext)s")
@@ -198,78 +335,196 @@ def download_and_transcribe_youtube(url: str, diarization_url: str):
         if not os.path.exists(audio_path):
             return {"error": "Файл не найден после скачивания"}
 
-        # Отправляем файл в оба API
-        with open(audio_path, "rb") as f:
-            files = {"file": (os.path.basename(audio_path), f, "audio/mpeg")}
-            diarization_response = requests.post(DIARIZATION_API_URL, files=files)
-            diarization_data = diarization_response.json()
+        # Создаем папку для фрагментов
+        fragment_dir = os.path.join(os.path.dirname(audio_path), "fragments")
+        os.makedirs(fragment_dir, exist_ok=True)
+        output_pattern = os.path.join(fragment_dir, "fragment_%03d.mp3")
 
-        with open(audio_path, "rb") as f:
-            files = {"file": (os.path.basename(audio_path), f, "audio/mpeg")}
-            transcript_response = requests.post(TRANSCRIBE_API_URL, files=files)
-            transcript_data = transcript_response.json()
+        # Разбиваем аудио на фрагменты по 30 секунд
+        command = [
+            os.path.join(ffmpeg_dir, "ffmpeg.exe"),
+            "-i", audio_path,
+            "-f", "segment",
+            "-segment_time", "30",
+            "-c", "copy",
+            output_pattern
+        ]
+        subprocess.run(command, check=True)
 
-        print("DEBUG diarization:", diarization_data)
-        print("DEBUG transcript:", transcript_data)
+        fragments = sorted([
+            os.path.join(fragment_dir, f)
+            for f in os.listdir(fragment_dir)
+            if f.startswith("fragment_") and f.endswith(".mp3")
+        ])
 
-        if "error" in diarization_data or "segments" not in transcript_data:
-            return {"error": "Ошибка в одном из API"}
+        if not fragments:
+            return {"error": "Не удалось разделить аудио на фрагменты"}
 
-        # Объединяем транскрипцию с диаризацией
-        combined = combine_transcript_with_diarization(
-            transcript_data.get("segments", []),
-            diarization_data.get("diarization", [])
-        )
-        combined = merge_consecutive_segments(combined)
+        all_segments = []
 
-        return {"combined": combined}
+        # Обрабатываем каждый фрагмент
+        for i, fragment_path in enumerate(fragments):
+            # Смещение времени для текущего фрагмента
+            time_offset = i * 30
+
+            # Отправляем фрагмент на транскрибацию
+            with open(fragment_path, "rb") as f:
+                transcript_response = requests.post(TRANSCRIBE_API_URL, files={"file": f})
+                transcript_data = transcript_response.json()
+
+            # Отправляем фрагмент на диаризацию
+            with open(fragment_path, "rb") as f:
+                diarization_response = requests.post(DIARIZATION_API_URL, files={"file": f})
+                diarization_data = diarization_response.json()
+
+            # Если получили ошибку - пропускаем фрагмент
+            if "segments" not in transcript_data or "diarization" not in diarization_data:
+                logging.error(
+                    f"Ошибка обработки фрагмента {i}: {transcript_data.get('error')} {diarization_data.get('error')}")
+                continue
+
+            # Корректируем временные метки
+            for segment in transcript_data.get("segments", []):
+                segment["start"] += time_offset
+                segment["end"] += time_offset
+
+            for segment in diarization_data.get("diarization", []):
+                segment["start"] += time_offset
+                segment["end"] += time_offset
+
+            # Объединяем результаты фрагмента
+            combined = combine_transcript_with_diarization(
+                transcript_data.get("segments", []),
+                diarization_data.get("diarization", [])
+            )
+            all_segments.extend(combined)
+
+        # Объединяем последовательные сегменты
+        merged = merge_consecutive_segments(all_segments)
+        return {"combined": merged}
 
     except Exception as e:
+        logging.exception("Ошибка при обработке YouTube видео")
         return {"error": str(e)}
 
     finally:
+        # Очистка временных файлов
         if os.path.exists(audio_path):
             os.remove(audio_path)
-
+        # Удаление фрагментов
+        fragment_dir = os.path.join(os.path.dirname(audio_path), "fragments")
+        if os.path.exists(fragment_dir):
+            for f in os.listdir(fragment_dir):
+                os.remove(os.path.join(fragment_dir, f))
+            os.rmdir(fragment_dir)
 
 #🔽 Загрузка и обработка медиа-файла
+# 🔽 Загрузка и обработка медиа-файла
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file = update.message.audio or update.message.voice or update.message.video or update.message.document
     if not file:
         return await update.message.reply_text("Файл не поддерживается.")
 
-    with tempfile.NamedTemporaryFile(delete=False) as temp:
+    # Создаем временный файл
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp:
         file_path = temp.name
 
+    # Скачиваем файл
     tg_file = await file.get_file()
     await tg_file.download_to_drive(file_path)
 
     await update.message.reply_text("📤 Загружаю и обрабатываю файл...")
 
     try:
-        # Получаем текст и диаризацию
-        transcript_data = await get_transcript(file_path)
-        diarization_data = await send_file_to_api(file_path, DIARIZATION_API_URL)
+        # Создаем папку для фрагментов
+        fragment_dir = os.path.join(os.path.dirname(file_path), "fragments")
+        os.makedirs(fragment_dir, exist_ok=True)
+        output_pattern = os.path.join(fragment_dir, "fragment_%03d.mp3")
 
-        if "error" in transcript_data or "error" in diarization_data:
-            await update.message.reply_text("❌ Ошибка обработки аудио")
+        # Разбиваем аудио на фрагменты по 30 секунд
+        command = [
+            os.path.join(ffmpeg_dir, "ffmpeg.exe"),
+            "-i", file_path,
+            "-f", "segment",
+            "-segment_time", "30",
+            "-c", "copy",
+            output_pattern
+        ]
+        subprocess.run(command, check=True)
+
+        fragments = sorted([
+            os.path.join(fragment_dir, f)
+            for f in os.listdir(fragment_dir)
+            if f.startswith("fragment_") and f.endswith(".mp3")
+        ])
+
+        if not fragments:
+            await update.message.reply_text("❌ Не удалось разделить аудио на фрагменты")
             return
 
-        combined = combine_transcript_with_diarization(
-            transcript_data["segments"],
-            diarization_data["diarization"]
-        )
-        combined = merge_consecutive_segments(combined)
+        all_segments = []
 
+        # Обрабатываем каждый фрагмент
+        for i, fragment_path in enumerate(fragments):
+            # Смещение времени для текущего фрагмента
+            time_offset = i * 30
+
+            # Получаем транскрипцию фрагмента
+            transcript_data = await send_file_to_api(fragment_path, TRANSCRIBE_API_URL)
+            # Получаем диаризацию фрагмента
+            diarization_data = await send_file_to_api(fragment_path, DIARIZATION_API_URL)
+
+            # Если получили ошибку - пропускаем фрагмент
+            if "segments" not in transcript_data or "diarization" not in diarization_data:
+                logging.error(
+                    f"Ошибка обработки фрагмента {i}: {transcript_data.get('error')} {diarization_data.get('error')}")
+                continue
+
+            # Корректируем временные метки
+            for segment in transcript_data.get("segments", []):
+                segment["start"] += time_offset
+                segment["end"] += time_offset
+
+            for segment in diarization_data.get("diarization", []):
+                segment["start"] += time_offset
+                segment["end"] += time_offset
+
+            # Объединяем результаты фрагмента
+            combined = combine_transcript_with_diarization(
+                transcript_data.get("segments", []),
+                diarization_data.get("diarization", [])
+            )
+            all_segments.extend(combined)
+
+        # Объединяем последовательные сегменты
+        merged = merge_consecutive_segments(all_segments)
+
+        # Формируем итоговый текст
         full_text = ""
-        for seg in combined:
+        for seg in merged:
             full_text += f"🗣 Спикер {seg['speaker']}:\n{seg['text']}\n\n"
 
-        await update.message.reply_text(full_text or "🤷 Ничего не распознано.")
+        # Отправляем результат частями
+        if full_text:
+            for i in range(0, len(full_text), 4000):
+                await update.message.reply_text(full_text[i:i + 4000])
+        else:
+            await update.message.reply_text("🤷 Ничего не распознано.")
+
+    except Exception as e:
+        logging.exception("Ошибка при обработке файла")
+        await update.message.reply_text(f"❌ Произошла ошибка: {str(e)}")
 
     finally:
-        os.remove(file_path)
-
+        # Очистка временных файлов
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        # Удаление фрагментов
+        fragment_dir = os.path.join(os.path.dirname(file_path), "fragments")
+        if os.path.exists(fragment_dir):
+            for f in os.listdir(fragment_dir):
+                os.remove(os.path.join(fragment_dir, f))
+            os.rmdir(fragment_dir)
 
 
 def main():
