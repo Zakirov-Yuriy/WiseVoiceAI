@@ -1,13 +1,16 @@
 locales = {
     'ru': {
         'welcome': (
-            "Привет! Отправь мне аудио, видео или ссылку (в т.ч. YouTube) — я всё транскрибирую 🧠\n\n"
-            "Я умею:\n"
-            "• Конспектировать длинные записи\n"
-            "• Работать с 99 языками\n"
-            "• Обрабатывать файлы конфиденциально\n\n"
-            "Жми кнопку ниже для новой обработки 👇"
+            "Transcribe To — бот, который превращает аудио и видео в текст\n\n"
+            "• Поддерживает видео, аудио, голосовые и ссылки с YouTube, VK Видео, Instagram, Facebook, RuTube, Twitter, Vimeo, Reddit\n"
+            "• Результаты в Google Docs, Word, PDF, TXT, Markdown\n"
+            "• Делает выжимку с ключевыми фактами\n"
+            "• Понимает более 120 языков\n"
+            "• Обрабатывает файлы длиной более 6 часов\n"
+            "• Нейросеть отвечает на вопросы по содержанию\n\n"
+            "Начните прямо сейчас — отправьте в чат файл или ссылку на видео 👇"
         ),
+
         'new_audio_prompt': (
             "Отправь мне новое аудио, видео или ссылку для обработки 🧠\n\n"
             "Я готов к работе!"
@@ -23,15 +26,21 @@ locales = {
         'caption_plain': "📄 Без указания спикеров",
         'uploading_file': "📤 Обрабатываю файл...",
         'new_audio_button': "🎤 Обработать новое аудио",
+        'api_unavailable': 'Сервис обработки аудио временно недоступен. Пожалуйста, попробуйте позже.',
+        'timeout_error': "⌛ Превышено время обработки. Попробуйте более короткое аудио.",
+        'telegram_timeout': "⏳ Telegram не ответил вовремя. Попробуйте еще раз.",
+        'api_error': "🔌 Ошибка подключения к сервису обработки. Попробуйте позже.",
     },
     'en': {
         'welcome': (
-            "Hello! Send me an audio, video, or a link (including YouTube) — I'll transcribe everything 🧠\n\n"
-            "I can:\n"
-            "• Summarize long recordings\n"
-            "• Work with 99 languages\n"
-            "• Process files confidentially\n\n"
-            "Click the button below for new processing 👇"
+            "Transcribe To — a bot that turns audio and video into text\n\n"
+            "• Supports video, audio, voice messages, and links from YouTube, VK Video, Instagram, Facebook, RuTube, Twitter, Vimeo, and Reddit\n"
+            "• Delivers results in Google Docs, Word, PDF, TXT, and Markdown\n"
+            "• Generates summaries with key facts\n"
+            "• Understands 120+ languages\n"
+            "• Handles files longer than 6 hours\n"
+            "• AI answers questions about the content\n\n"
+            "Get started now – send a file or video link to the chat 👇"
         ),
         'new_audio_prompt': (
             "Send me a new audio, video, or link for processing 🧠\n\n"
@@ -48,5 +57,6 @@ locales = {
         'caption_plain': "📄 Without speakers",
         'uploading_file': "📤 Processing the file...",
         'new_audio_button': "🎤 Process new audio",
+        'api_unavailable': 'Сервис обработки аудио временно недоступен. Пожалуйста, попробуйте позже.',
     }
 }
